@@ -27,14 +27,7 @@ import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 
-import java.io.BufferedReader;
-import java.io.BufferedWriter;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileNotFoundException;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.OutputStreamWriter;
+import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.file.DirectoryStream;
@@ -65,9 +58,19 @@ public class JFilesServer implements Runnable {
 	static final Logger logger = LogManager.getLogger(JFilesServer.class);
 	private static int PORT;
 	private static int MAXTHREADS;
-	private final ServerSocket serverSocket;
+	private static ServerSocket serverSocket;
 	private static final String UTF_8 = "UTF-8";
 
+	private Socket socket;
+
+	static {
+		try {
+			serverSocket = new ServerSocket(PORT);
+		} catch (IOException e) {
+			logger.error("Some error occurred", e);
+		}
+	}
+	
 	/**
 	 * Handles allocating resources needed for the server.
 	 * 
@@ -129,17 +132,17 @@ public class JFilesServer implements Runnable {
 	 * This is a Javadoc comment to statisfy Checkstyle.
 	 * @throws IOException When bad things happen
 	 */
-	public JFilesServer() throws IOException {
-		serverSocket = new ServerSocket(PORT);
+	public JFilesServer(Socket sock) throws IOException {
+		socket = sock;
 	}
-	
+
 	/**
 	 * Creates an XML file.
 	 * @throws TransformerFactoryConfigurationError error in configuration
 	 * @throws TransformerException error in configuration
 	 */
 	private void createXml() throws TransformerFactoryConfigurationError, 
-					TransformerException {
+		TransformerException {
 		Document doc = null;
 		try {
 			// Create new XML document
@@ -148,21 +151,21 @@ public class JFilesServer implements Runnable {
 			DocumentBuilder builder;
 			builder = factory.newDocumentBuilder();
 			doc = builder.newDocument();
-			
+
 			// Add elements to new document
 			Element root = doc.createElement("fileSystem");
 			doc.appendChild(root);
 			Node dir = createNode(doc,"directory");
 			dir.appendChild(createNode(doc,"file"));
 			root.appendChild(dir);
-			
+
 			//Output XML to console
 			Transformer transformer = TransformerFactory.newInstance().newTransformer();
 			transformer.setOutputProperty(OutputKeys.INDENT, "yes");
 			DOMSource source = new DOMSource(doc);
 			StreamResult console = new StreamResult(System.out);
 			transformer.transform(source, console);
-			
+
 		} catch (ParserConfigurationException e) {
 			logger.error("An error occurred while configuring the parser",e);
 		} catch (TransformerConfigurationException e) {
@@ -171,7 +174,7 @@ public class JFilesServer implements Runnable {
 			logger.error("An error occurred while configuring the transformer factory",e);
 		}
 	}
-	
+
 	/**
 	 * Create an xml node.
 	 * @param doc document to create node for
@@ -185,53 +188,59 @@ public class JFilesServer implements Runnable {
 
 	@Override
 	public void run() {
-		String dir = System.getProperty("user.dir");
-		try (Socket server = serverSocket.accept()) {
-			logger.info("Received connection from" + server.getRemoteSocketAddress());
-			InputStreamReader isr = new InputStreamReader(server.getInputStream(), UTF_8);
+		//String dir = System.getProperty("user.dir");
+		//These were added to implement File command
+		//------------------------------------------
+		try {
+			System.out.println("Received connection from" + socket.getRemoteSocketAddress());
+			InputStreamReader isr = new InputStreamReader(socket.getInputStream(), UTF_8);
 			BufferedReader in = new BufferedReader(isr);
-			String cmd;
-			while (null != (cmd = in.readLine())) {
-				if ("".equals(cmd)) {
+			String cmd = in.readLine();
+
+			if (cmd != null) {
+				switch (cmd) {
+				case "FILE":
+					sendFile("AUTHORS",socket);
+					socket.close();	
+					break;
+
+				case "LIST":
+					break;
+
+				default:
+					System.out.println("Invalid Command.");
 					break;
 				}
-				OutputStreamWriter osw = new OutputStreamWriter(server.getOutputStream(), UTF_8);
-
-				BufferedWriter out = new BufferedWriter(osw);
-				String[] baseCommand = cmd.split(" ");
-				if ("LIST".equalsIgnoreCase(baseCommand[0])) {
-					try (DirectoryStream<Path> directoryStream = Files
-							.newDirectoryStream(Paths.get(dir))) {
-						for (Path path : directoryStream) {
-							out.write(path.toString() + "\n");
-						}
-					}
-
-				}
-				// start Search block
-				if ("FIND".equalsIgnoreCase(baseCommand[0])) {
-
-					try (DirectoryStream<Path> directoryStream = Files
-							.newDirectoryStream(Paths.get(dir))) {
-						for (Path path : directoryStream) {
-							// out.write(path.toString() + "\n");
-							if (path.toString().contains(baseCommand[1])) {
-								out.write(path.toString() + "\n");
-							}
-
-						}
-					}
-
-				} else { // End search block
-					logger.error("Unknown commad");
-				}
-				out.flush();
 			}
 		} catch (IOException e) {
-			//TODO Auto-generated catch block
-			//e.printStackTrace();
-			logger.error("Some error occured", e);
+			logger.error("Some error occurred", e);
+		} 
+	}
+
+	/**
+	 * When FILE command is received from client, server calls this method
+	 * to handle file transfer.
+	 * 
+	 * @param servsock the socket where the server connection resides
+	 */
+	public void sendFile(String file, Socket servsock) {
+
+
+		try (BufferedReader br = new BufferedReader(new FileReader("AUTHORS"))) {
+			OutputStreamWriter osw = new OutputStreamWriter(servsock.getOutputStream(), UTF_8);
+			BufferedWriter out = new BufferedWriter(osw);
+			String line;
+
+			while ((line = br.readLine()) != null) {
+				System.out.println(line);
+				out.write(line + "\n") ;
+			}
+			out.flush();
+
+		} catch (IOException e) {
+			logger.error("Some error occurred", e);
 		}
+
 	}
 
 	/**
@@ -244,21 +253,37 @@ public class JFilesServer implements Runnable {
 		try {
 			init();
 			logger.info("Starting the server");
-			JFilesServer jf = new JFilesServer();
-			try {
-				jf.createXml();
-			} catch (TransformerFactoryConfigurationError e) {
-				// TODO Auto-generated catch block
-				e.printStackTrace();
-			} catch (TransformerException e) {
-				// TODO Auto-generated catch block
-				e.printStackTrace();
+			//Counts how many Threads there are
+			int numThrds = 1;
+			//A while loop that currently runs forever that will constantly obtain
+			//new connections and passing them to new threads.
+			//Recycles variable names
+			while (true) {
+				System.out.println("Preparing thread " + numThrds);
+				logger.info("Preparing thread " + numThrds);
+				System.out.println("Waiting for connection...");
+				logger.info("Waiting for connection...");
+				//Obtain a Socket object
+				Socket sock = serverSocket.accept();
+				//Passes socket object to new server object
+				JFilesServer jf = new JFilesServer(sock);
+				try {
+					jf.createXml();
+				} catch (TransformerFactoryConfigurationError e) {
+					logger.error("An error occurred while configuring the transformer factory", e);
+				} catch (TransformerException e) {
+					logger.error("An exception has occurred with the transformer", e);
+				}
+				//Create and start a new Thread object with server object
+				Thread thread = new Thread(jf);
+				thread.start();
+				//Sleep the main thread so that status messages remain organized
+				//Thread.sleep(2);
+				//Iterates the numThrds variable by 1
+				numThrds++;
 			}
-			//Thread thread = new Thread(jf);
-			//thread.start();
 		} catch (IOException e) {
-			e.printStackTrace();
+			logger.error("Some error occurred", e);
 		}
 	}
-
 }
